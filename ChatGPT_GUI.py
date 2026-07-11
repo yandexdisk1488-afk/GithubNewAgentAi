@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-🚀 ChatGPT GUI Application
+🚀 ChatGPT GUI Application v1.0
 Полнофункциональное приложение для чата с GPT с красивым интерфейсом
 Все компоненты встроены в один файл - готово к запуску как SFX архив
 
-Автоматическая установка зависимостей при первом запуске!
+✅ Автоматическая установка зависимостей при первом запуске!
+✅ Все конфигурации сохраняются автоматически
+✅ История чата сохраняется локально
+✅ Поддержка всех моделей GPT
 """
 
 import sys
@@ -17,6 +21,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
 import traceback
+
+print("=" * 60)
+print("🚀 ChatGPT GUI - Инициализация приложения...")
+print("=" * 60)
 
 # ==================== AUTO INSTALL DEPENDENCIES ====================
 def ensure_dependencies():
@@ -32,28 +40,57 @@ def ensure_dependencies():
     for module, package in required_packages.items():
         try:
             __import__(module)
+            print(f"✅ {module} - установлен")
         except ImportError:
             missing.append(package)
+            print(f"⚠️ {module} - отсутствует, будет установлен")
     
     if missing:
-        print(f"📦 Установка зависимостей: {', '.join(missing)}")
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
-        print("✅ Зависимости установлены!")
+        print(f"\n📦 Установка {len(missing)} зависимости(й)...")
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
+            print("✅ Все зависимости установлены успешно!\n")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Ошибка при установке: {e}")
+            sys.exit(1)
 
+print("\n📦 Проверка зависимостей...")
 ensure_dependencies()
 
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QPushButton, QLabel, QComboBox, QSlider, QSpinBox,
-    QFileDialog, QMessageBox, QTabWidget, QScrollArea, QSplitter,
-    QSystemTrayIcon, QMenu, QStatusBar, QProgressBar, QCheckBox
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QPalette, QKeySequence
-from PyQt6.QtWidgets import QApplication as QApp
+# Импорт PyQt6
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QTextEdit, QPushButton, QLabel, QComboBox, QSlider, QSpinBox,
+        QFileDialog, QMessageBox, QTabWidget, QScrollArea, QSplitter,
+        QSystemTrayIcon, QMenu, QStatusBar, QProgressBar, QCheckBox,
+        QDialog, QLineEdit
+    )
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
+    from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QPalette, QKeySequence, QShortcut
+    from PyQt6.QtWidgets import QApplication as QApp
+    print("✅ PyQt6 - импортирован успешно")
+except ImportError as e:
+    print(f"❌ Ошибка импорта PyQt6: {e}")
+    sys.exit(1)
 
-from openai import OpenAI, APIError, APIConnectionError, RateLimitError
-from dotenv import load_dotenv
+# Импорт OpenAI
+try:
+    from openai import OpenAI, APIError, APIConnectionError, RateLimitError
+    print("✅ OpenAI - импортирован успешно")
+except ImportError as e:
+    print(f"❌ Ошибка импорта OpenAI: {e}")
+    sys.exit(1)
+
+# Импорт dotenv
+try:
+    from dotenv import load_dotenv
+    print("✅ python-dotenv - импортирован успешно")
+except ImportError as e:
+    print(f"❌ Ошибка импорта dotenv: {e}")
+    sys.exit(1)
+
+print("\n✅ Все импорты успешны!\n")
 
 
 # ==================== CONFIGURATION ====================
@@ -71,6 +108,9 @@ class Config:
     DARK_INPUT = "#2d2d2d"
     DARK_TEXT = "#ffffff"
     ACCENT_COLOR = "#00a8ff"
+    ERROR_COLOR = "#ff4444"
+    SUCCESS_COLOR = "#00ff88"
+    WARNING_COLOR = "#ffaa00"
     
     # Models
     AVAILABLE_MODELS = [
@@ -83,13 +123,37 @@ class Config:
     # Default settings
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MODEL = "gpt-3.5-turbo"
-    MAX_TOKENS = 4096
+    MAX_TOKENS = 2048
     
     # Paths
     CONFIG_DIR = Path.home() / ".chatgpt_gui"
     ENV_FILE = CONFIG_DIR / ".env"
     HISTORY_FILE = CONFIG_DIR / "chat_history.json"
     SETTINGS_FILE = CONFIG_DIR / "settings.json"
+    LOG_FILE = CONFIG_DIR / "app.log"
+
+
+# Создать директорию конфигурации
+Config.CONFIG_DIR.mkdir(exist_ok=True)
+
+
+# ==================== LOGGING ====================
+class Logger:
+    """Простой логгер"""
+    
+    @staticmethod
+    def log(message: str, level: str = "INFO"):
+        """Логировать сообщение"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_message = f"[{timestamp}] [{level}] {message}"
+        
+        try:
+            with open(Config.LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(log_message + "\n")
+        except:
+            pass
+        
+        print(log_message)
 
 
 # ==================== OPENAI CLIENT MANAGER ====================
@@ -100,8 +164,17 @@ class OpenAIManager:
         self.client: Optional[OpenAI] = None
         self.model = Config.DEFAULT_MODEL
         self.temperature = Config.DEFAULT_TEMPERATURE
+        self.max_tokens = Config.MAX_TOKENS
         self.conversation_history = []
-        self.initialize()
+        self.is_initialized = False
+        
+        try:
+            self.initialize()
+            self.is_initialized = True
+            Logger.log("OpenAI менеджер инициализирован успешно", "INFO")
+        except Exception as e:
+            Logger.log(f"Ошибка инициализации OpenAI: {e}", "ERROR")
+            raise
     
     def initialize(self):
         """Инициализировать клиент OpenAI"""
@@ -109,17 +182,34 @@ class OpenAIManager:
         api_key = os.getenv("OPENAI_API_KEY")
         
         if not api_key:
-            raise ValueError("❌ OPENAI_API_KEY не установлен!")
+            raise ValueError(
+                "❌ OPENAI_API_KEY не установлен!\n\n"
+                "Пожалуйста:\n"
+                "1. Получи ключ на https://platform.openai.com/api-keys\n"
+                "2. Нажми на кнопку 'API Ключ' в приложении\n"
+                "3. Введи свой ключ\n"
+                "4. Перезагрузи приложение"
+            )
         
-        self.client = OpenAI(api_key=api_key)
+        try:
+            self.client = OpenAI(api_key=api_key)
+            # Проверить подключение
+            self.client.models.list()
+        except Exception as e:
+            raise ValueError(f"❌ Ошибка подключения к OpenAI: {str(e)}")
     
     def set_model(self, model: str):
         """Установить модель"""
         self.model = model
+        Logger.log(f"Модель изменена на: {model}", "INFO")
     
     def set_temperature(self, temp: float):
         """Установить температуру"""
         self.temperature = max(0.0, min(2.0, temp))
+    
+    def set_max_tokens(self, tokens: int):
+        """Установить макс токены"""
+        self.max_tokens = max(100, min(8192, tokens))
     
     def add_message(self, role: str, content: str):
         """Добавить сообщение в историю"""
@@ -131,39 +221,55 @@ class OpenAIManager:
     def clear_history(self):
         """Очистить историю"""
         self.conversation_history = []
+        Logger.log("История разговора очищена", "INFO")
     
-    def get_response(self, user_message: str) -> str:
-        """Получить ответ от GPT"""
+    def get_response(self, user_message: str) -> tuple[str, bool]:
+        """Получить ответ от GPT. Возвращает (ответ, успех)"""
         try:
+            if not self.is_initialized:
+                return "❌ OpenAI клиент не инициализирован", False
+            
             self.add_message("user", user_message)
+            
+            start_time = time.time()
             
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=self.conversation_history,
                 temperature=self.temperature,
-                max_tokens=Config.MAX_TOKENS
+                max_tokens=self.max_tokens
             )
             
+            elapsed_time = time.time() - start_time
             assistant_message = response.choices[0].message.content
             self.add_message("assistant", assistant_message)
             
-            return assistant_message
+            Logger.log(f"Ответ получен за {elapsed_time:.2f}s", "INFO")
+            return assistant_message, True
             
         except APIConnectionError as e:
-            return f"❌ Ошибка подключения: {str(e)}"
+            error_msg = f"❌ Ошибка подключения: {str(e)}"
+            Logger.log(error_msg, "ERROR")
+            return error_msg, False
         except RateLimitError:
-            return f"⏱️ Ограничение по запросам. Попробуй позже."
+            error_msg = "⏱️ Ограничение по запросам. Попробуй позже."
+            Logger.log(error_msg, "WARNING")
+            return error_msg, False
         except APIError as e:
-            return f"❌ Ошибка API: {str(e)}"
+            error_msg = f"❌ Ошибка API: {str(e)}"
+            Logger.log(error_msg, "ERROR")
+            return error_msg, False
         except Exception as e:
-            return f"❌ Ошибка: {str(e)}"
+            error_msg = f"❌ Неожиданная ошибка: {str(e)}"
+            Logger.log(error_msg, "ERROR")
+            return error_msg, False
 
 
 # ==================== CHAT WORKER THREAD ====================
 class ChatWorker(QThread):
     """Рабочий поток для обработки сообщений"""
     
-    response_received = pyqtSignal(str)
+    response_received = pyqtSignal(str, bool)
     error_occurred = pyqtSignal(str)
     
     def __init__(self, manager: OpenAIManager, message: str):
@@ -174,10 +280,12 @@ class ChatWorker(QThread):
     def run(self):
         """Запустить рабочий поток"""
         try:
-            response = self.manager.get_response(self.message)
-            self.response_received.emit(response)
+            response, success = self.manager.get_response(self.message)
+            self.response_received.emit(response, success)
         except Exception as e:
-            self.error_occurred.emit(f"❌ Ошибка: {str(e)}")
+            error_msg = f"❌ Ошибка обработки: {str(e)}"
+            Logger.log(error_msg, "ERROR")
+            self.error_occurred.emit(error_msg)
 
 
 # ==================== MAIN APPLICATION ====================
@@ -187,27 +295,33 @@ class ChatGPTGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        Logger.log("Инициализация главного окна", "INFO")
+        
         # Инициализация менеджера
         try:
             self.manager = OpenAIManager()
         except ValueError as e:
-            self.show_error("❌ Ошибка инициализации", str(e))
+            Logger.log(str(e), "ERROR")
+            self.show_error_dialog("❌ Ошибка инициализации", str(e))
+            sys.exit(1)
+        except Exception as e:
+            Logger.log(f"Неожиданная ошибка: {str(e)}", "ERROR")
+            self.show_error_dialog("❌ Критическая ошибка", str(e))
             sys.exit(1)
         
         self.current_worker: Optional[ChatWorker] = None
         self.is_loading = False
         
-        # Создание директорий
-        Config.CONFIG_DIR.mkdir(exist_ok=True)
-        
         # Инициализация UI
         self.init_ui()
         self.load_settings()
         self.load_history()
+        
+        Logger.log("Приложение успешно запущено", "INFO")
     
     def init_ui(self):
         """Инициализировать пользовательский интерфейс"""
-        self.setWindowTitle("💬 ChatGPT GUI - Полнофункциональный чат")
+        self.setWindowTitle("💬 ChatGPT GUI v1.0")
         self.setGeometry(100, 100, Config.WINDOW_WIDTH, Config.WINDOW_HEIGHT)
         self.setStyleSheet(self.get_stylesheet())
         
@@ -239,7 +353,7 @@ class ChatGPTGUI(QMainWindow):
         
         # Поле ввода
         self.chat_input = QTextEdit()
-        self.chat_input.setPlaceholderText("Введи сообщение и нажми Shift+Enter для отправки...")
+        self.chat_input.setPlaceholderText("Введи сообщение и нажми Shift+Enter или кнопку 'Отправить'...")
         self.chat_input.setMaximumHeight(100)
         self.chat_input.setFont(QFont("Consolas", Config.FONT_SIZE))
         left_layout.addWidget(self.chat_input)
@@ -258,7 +372,7 @@ class ChatGPTGUI(QMainWindow):
         button_layout.addWidget(self.clear_btn)
         
         self.copy_btn = QPushButton("📋 Копировать")
-        self.copy_btn.clicked.connect(self.copy_last_response)
+        self.copy_btn.clicked.connect(self.copy_chat)
         self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         button_layout.addWidget(self.copy_btn)
         
@@ -318,6 +432,9 @@ class ChatGPTGUI(QMainWindow):
         self.tokens_spin.setMaximum(8192)
         self.tokens_spin.setValue(Config.MAX_TOKENS)
         self.tokens_spin.setSingleStep(100)
+        self.tokens_spin.valueChanged.connect(
+            lambda: self.manager.set_max_tokens(self.tokens_spin.value())
+        )
         right_layout.addWidget(self.tokens_spin)
         
         # Разделитель
@@ -360,7 +477,7 @@ class ChatGPTGUI(QMainWindow):
         right_layout.addStretch()
         
         # Кнопка настроек API
-        settings_btn = QPushButton("🔑 API Ключ")
+        settings_btn = QPushButton("🔑 Установить API Ключ")
         settings_btn.clicked.connect(self.setup_api_key)
         right_layout.addWidget(settings_btn)
         
@@ -375,11 +492,9 @@ class ChatGPTGUI(QMainWindow):
     
     def setup_shortcuts(self):
         """Настроить горячие клавиши"""
-        from PyQt6.QtGui import QShortcut
-        
         # Shift+Enter для отправки сообщения
-        QShortcut(QKeySequence("Shift+Return"), self.send_message, context=Qt.ShortcutContext.WidgetShortcut)
-        QShortcut(QKeySequence("Shift+Enter"), self.send_message, context=Qt.ShortcutContext.WidgetShortcut)
+        QShortcut(QKeySequence("Shift+Return"), self, self.send_message)
+        QShortcut(QKeySequence("Shift+Enter"), self, self.send_message)
     
     def send_message(self):
         """Отправить сообщение"""
@@ -394,7 +509,7 @@ class ChatGPTGUI(QMainWindow):
             return
         
         # Добавить сообщение пользователя в чат
-        self.display_message("👤 Ты", message, "#00a8ff")
+        self.display_message("👤 Ты", message, Config.ACCENT_COLOR)
         self.chat_input.clear()
         
         # Показать индикатор загрузки
@@ -402,6 +517,7 @@ class ChatGPTGUI(QMainWindow):
         self.progress.setVisible(True)
         self.send_btn.setEnabled(False)
         self.statusBar().showMessage("⏳ Ожидание ответа...")
+        Logger.log(f"Отправлено сообщение: {message[:50]}...", "INFO")
         
         # Запустить рабочий поток
         self.current_worker = ChatWorker(self.manager, message)
@@ -409,9 +525,11 @@ class ChatGPTGUI(QMainWindow):
         self.current_worker.error_occurred.connect(self.on_error)
         self.current_worker.start()
     
-    def on_response_received(self, response: str):
+    def on_response_received(self, response: str, success: bool):
         """Обработать полученный ответ"""
-        self.display_message("🤖 GPT", response, "#00ff88")
+        color = Config.SUCCESS_COLOR if success else Config.ERROR_COLOR
+        self.display_message("🤖 GPT", response, color)
+        
         self.is_loading = False
         self.progress.setVisible(False)
         self.send_btn.setEnabled(True)
@@ -420,11 +538,12 @@ class ChatGPTGUI(QMainWindow):
     
     def on_error(self, error_msg: str):
         """Обработать ошибку"""
-        self.display_message("❌ Ошибка", error_msg, "#ff4444")
+        self.display_message("❌ Ошибка", error_msg, Config.ERROR_COLOR)
         self.is_loading = False
         self.progress.setVisible(False)
         self.send_btn.setEnabled(True)
         self.statusBar().showMessage("❌ Ошибка")
+        Logger.log(error_msg, "ERROR")
     
     def display_message(self, role: str, content: str, color: str):
         """Отобразить сообщение в чате"""
@@ -459,15 +578,19 @@ class ChatGPTGUI(QMainWindow):
             self.statusBar().showMessage("✅ Чат очищен")
             self.update_info_label()
     
-    def copy_last_response(self):
-        """Копировать последний ответ"""
+    def copy_chat(self):
+        """Копировать текст чата"""
         try:
             from PyQt6.QtGui import QClipboard
             clipboard = QApplication.clipboard()
             text = self.chat_display.toPlainText()
-            clipboard.setText(text)
-            self.statusBar().showMessage("✅ Скопировано в буфер обмена")
+            if text:
+                clipboard.setText(text)
+                self.statusBar().showMessage("✅ Скопировано в буфер обмена")
+            else:
+                self.show_warning("⚠️ Нечего копировать", "Чат пуст")
         except Exception as e:
+            Logger.log(f"Ошибка копирования: {e}", "ERROR")
             self.show_error("❌ Ошибка копирования", str(e))
     
     def on_temperature_changed(self):
@@ -493,7 +616,9 @@ class ChatGPTGUI(QMainWindow):
                             f.write(f"{msg['role'].upper()}:\n{msg['content']}\n\n")
                 
                 self.statusBar().showMessage(f"✅ История сохранена: {file_path}")
+                Logger.log(f"История сохранена в: {file_path}", "INFO")
         except Exception as e:
+            Logger.log(f"Ошибка сохранения: {e}", "ERROR")
             self.show_error("❌ Ошибка сохранения", str(e))
     
     def load_chat_history(self):
@@ -511,12 +636,14 @@ class ChatGPTGUI(QMainWindow):
                     
                     for msg in history:
                         role = "👤 Ты" if msg['role'] == 'user' else "🤖 GPT"
-                        color = "#00a8ff" if msg['role'] == 'user' else "#00ff88"
+                        color = Config.ACCENT_COLOR if msg['role'] == 'user' else Config.SUCCESS_COLOR
                         self.display_message(role, msg['content'], color)
                 
                 self.statusBar().showMessage(f"✅ История загружена: {file_path}")
                 self.update_info_label()
+                Logger.log(f"История загружена из: {file_path}", "INFO")
         except Exception as e:
+            Logger.log(f"Ошибка загрузки: {e}", "ERROR")
             self.show_error("❌ Ошибка загрузки", str(e))
     
     def load_history(self):
@@ -525,8 +652,9 @@ class ChatGPTGUI(QMainWindow):
             if Config.HISTORY_FILE.exists():
                 with open(Config.HISTORY_FILE, 'r', encoding='utf-8') as f:
                     self.manager.conversation_history = json.load(f)
-        except:
-            pass
+                    Logger.log(f"Загружена история из файла: {Config.HISTORY_FILE}", "INFO")
+        except Exception as e:
+            Logger.log(f"Не удалось загрузить историю: {e}", "WARNING")
     
     def save_settings(self):
         """Сохранить настройки"""
@@ -539,8 +667,9 @@ class ChatGPTGUI(QMainWindow):
             
             with open(Config.SETTINGS_FILE, 'w') as f:
                 json.dump(settings, f, indent=2)
-        except:
-            pass
+            Logger.log("Настройки сохранены", "INFO")
+        except Exception as e:
+            Logger.log(f"Ошибка сохранения настроек: {e}", "ERROR")
     
     def load_settings(self):
         """Загрузить настройки"""
@@ -556,47 +685,52 @@ class ChatGPTGUI(QMainWindow):
                     temp = settings.get('temperature', Config.DEFAULT_TEMPERATURE)
                     self.temp_slider.setValue(int(temp * 100))
                     
-                    Config.MAX_TOKENS = settings.get('max_tokens', Config.MAX_TOKENS)
-                    self.tokens_spin.setValue(Config.MAX_TOKENS)
-        except:
-            pass
+                    max_tokens = settings.get('max_tokens', Config.MAX_TOKENS)
+                    self.tokens_spin.setValue(max_tokens)
+                    self.manager.set_max_tokens(max_tokens)
+                    
+                    Logger.log("Настройки загружены", "INFO")
+        except Exception as e:
+            Logger.log(f"Не удалось загрузить настройки: {e}", "WARNING")
     
     def update_info_label(self):
-        """Обновить информацион метку"""
+        """Обновить информационную метку"""
         history_len = len(self.manager.conversation_history)
         model = self.model_combo.currentText()
         temp = self.temp_slider.value() / 100.0
         
-        info_text = f"""
-        📊 Информация:
-        • Модель: {model}
-        • Температура: {temp:.1f}
-        • Сообщений: {history_len}
-        • Время: {datetime.now().strftime('%H:%M:%S')}
-        """
+        info_text = f"""📊 Информация:
+• Модель: {model}
+• Температура: {temp:.1f}
+• Макс токены: {self.tokens_spin.value()}
+• Сообщений: {history_len}
+• Время: {datetime.now().strftime('%H:%M:%S')}
+• Статус: {"🟢 Online" if self.manager.is_initialized else "🔴 Offline"}"""
         
-        self.info_label.setText(info_text.strip())
+        self.info_label.setText(info_text)
     
     def setup_api_key(self):
         """Настроить API ключ"""
-        from PyQt6.QtWidgets import QDialog, QLineEdit
-        
         dialog = QDialog(self)
         dialog.setWindowTitle("🔑 API Ключ OpenAI")
-        dialog.setGeometry(400, 300, 500, 150)
+        dialog.setGeometry(400, 300, 600, 250)
         dialog.setStyleSheet(self.get_stylesheet())
         
         layout = QVBoxLayout()
         
-        layout.addWidget(QLabel("Введи свой OpenAI API ключ:"))
+        layout.addWidget(QLabel("📝 Введи свой OpenAI API ключ:"))
+        layout.addWidget(QLabel("Получи ключ на: https://platform.openai.com/api-keys"))
         
         key_input = QLineEdit()
         key_input.setEchoMode(QLineEdit.EchoMode.Password)
         
         # Загрузить текущий ключ
-        current_key = os.getenv("OPENAI_API_KEY", "")
-        if current_key:
-            key_input.setText(current_key)
+        try:
+            current_key = os.getenv("OPENAI_API_KEY", "")
+            if current_key:
+                key_input.setText(current_key)
+        except:
+            pass
         
         layout.addWidget(key_input)
         
@@ -604,6 +738,15 @@ class ChatGPTGUI(QMainWindow):
         
         save_btn = QPushButton("💾 Сохранить")
         cancel_btn = QPushButton("❌ Отмена")
+        show_key_btn = QPushButton("👁️ Показать")
+        
+        def toggle_show_key():
+            if key_input.echoMode() == QLineEdit.EchoMode.Password:
+                key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+                show_key_btn.setText("🙈 Скрыть")
+            else:
+                key_input.setEchoMode(QLineEdit.EchoMode.Password)
+                show_key_btn.setText("👁️ Показать")
         
         def save_key():
             api_key = key_input.text().strip()
@@ -622,15 +765,20 @@ class ChatGPTGUI(QMainWindow):
                 
                 # Пересоздать клиент
                 self.manager = OpenAIManager()
+                self.update_info_label()
                 
-                QMessageBox.information(dialog, "✅ Сохранено", "API ключ успешно сохранен!")
+                QMessageBox.information(dialog, "✅ Успешно", "API ключ сохранен и проверен!")
+                Logger.log("API ключ успешно сохранен", "INFO")
                 dialog.close()
             except Exception as e:
+                Logger.log(f"Ошибка сохранения API ключа: {e}", "ERROR")
                 QMessageBox.critical(dialog, "❌ Ошибка", f"Ошибка сохранения: {str(e)}")
         
+        show_key_btn.clicked.connect(toggle_show_key)
         save_btn.clicked.connect(save_key)
         cancel_btn.clicked.connect(dialog.close)
         
+        btn_layout.addWidget(show_key_btn)
         btn_layout.addWidget(save_btn)
         btn_layout.addWidget(cancel_btn)
         
@@ -641,21 +789,29 @@ class ChatGPTGUI(QMainWindow):
     
     def show_error(self, title: str, message: str):
         """Показать ошибку"""
+        Logger.log(f"{title}: {message}", "ERROR")
         QMessageBox.critical(self, title, message)
+    
+    def show_error_dialog(self, title: str, message: str):
+        """Показать диалог ошибки (для использования до создания окна)"""
+        QMessageBox.critical(None, title, message)
     
     def show_warning(self, title: str, message: str):
         """Показать предупреждение"""
+        Logger.log(f"{title}: {message}", "WARNING")
         QMessageBox.warning(self, title, message)
     
     def closeEvent(self, event):
         """Обработать закрытие окна"""
+        Logger.log("Закрытие приложения", "INFO")
+        
         self.save_settings()
         
         try:
             with open(Config.HISTORY_FILE, 'w') as f:
                 json.dump(self.manager.conversation_history, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+        except Exception as e:
+            Logger.log(f"Ошибка сохранения истории при выходе: {e}", "WARNING")
         
         event.accept()
     
@@ -663,7 +819,7 @@ class ChatGPTGUI(QMainWindow):
     def get_stylesheet() -> str:
         """Получить таблицу стилей"""
         return f"""
-        QMainWindow, QWidget {{
+        QMainWindow, QWidget, QDialog {{
             background-color: {Config.DARK_BG};
             color: {Config.DARK_TEXT};
         }}
@@ -741,6 +897,15 @@ class ChatGPTGUI(QMainWindow):
             font-size: {Config.FONT_SIZE}pt;
         }}
         
+        QLineEdit {{
+            background-color: {Config.DARK_INPUT};
+            color: {Config.DARK_TEXT};
+            border: 1px solid {Config.ACCENT_COLOR};
+            border-radius: 5px;
+            padding: 5px;
+            font-size: {Config.FONT_SIZE}pt;
+        }}
+        
         QLabel {{
             color: {Config.DARK_TEXT};
             font-size: {Config.FONT_SIZE}pt;
@@ -761,32 +926,53 @@ class ChatGPTGUI(QMainWindow):
         QProgressBar::chunk {{
             background-color: {Config.ACCENT_COLOR};
         }}
+        
+        QMessageBox {{
+            background-color: {Config.DARK_BG};
+        }}
+        
+        QMessageBox QLabel {{
+            color: {Config.DARK_TEXT};
+        }}
         """
 
 
 # ==================== MAIN ====================
 def main():
     """Главная функция"""
+    print("\n" + "=" * 60)
+    print("🚀 Запуск ChatGPT GUI Application")
+    print("=" * 60 + "\n")
+    
     app = QApplication(sys.argv)
     
-    # Установить иконку приложения
+    # Установить свойства приложения
     app.setApplicationName("ChatGPT GUI")
     app.setApplicationVersion("1.0.0")
     
-    # Создать главное окно
-    window = ChatGPTGUI()
-    window.show()
-    
-    sys.exit(app.exec())
+    try:
+        # Создать главное окно
+        window = ChatGPTGUI()
+        window.show()
+        
+        Logger.log("GUI успешно загружено", "INFO")
+        
+        sys.exit(app.exec())
+    except Exception as e:
+        Logger.log(f"Критическая ошибка: {str(e)}", "ERROR")
+        print(f"\n❌ Критическая ошибка: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n👋 До свидания!")
+        print("\n\n👋 До свидания!")
+        Logger.log("Приложение закрыто пользователем", "INFO")
         sys.exit(0)
     except Exception as e:
-        print(f"❌ Критическая ошибка: {str(e)}")
+        print(f"\n❌ Ошибка: {str(e)}")
         traceback.print_exc()
         sys.exit(1)
